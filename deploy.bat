@@ -166,7 +166,7 @@ if %WINDHAWK_IS_PORTABLE%==1 (
     reg add "HKLM\SOFTWARE\Windhawk\Engine\Mods\local@zen-fileexplorer-transparent" /v "Include" /t REG_SZ /d "explorer.exe" /f >nul
     reg add "HKLM\SOFTWARE\Windhawk\Engine\Mods\local@zen-fileexplorer-transparent" /v "Exclude" /t REG_SZ /d "" /f >nul
     reg add "HKLM\SOFTWARE\Windhawk\Engine\Mods\local@zen-fileexplorer-transparent" /v "Architecture" /t REG_SZ /d "x86-64" /f >nul
-    reg add "HKLM\SOFTWARE\Windhawk\Engine\Mods\local@zen-fileexplorer-transparent" /v "Version" /t REG_SZ /d "1.0.0" /f >nul
+    reg add "HKLM\SOFTWARE\Windhawk\Engine\Mods\local@zen-fileexplorer-transparent" /v "Version" /t REG_SZ /d "2.0.0" /f >nul
 
     reg add "HKLM\SOFTWARE\Windhawk\Settings" /v "AlwaysCompileModsLocally" /t REG_DWORD /d 1 /f >nul
     echo       [OK] Registry entries created
