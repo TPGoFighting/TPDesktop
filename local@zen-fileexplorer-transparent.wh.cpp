@@ -2,7 +2,7 @@
 // @id              zen-fileexplorer-transparent
 // @name            TPDesktop: File Explorer Transparent Background
 // @description     Makes File Explorer folder background transparent - shows desktop wallpaper through the file list area. Configurable modes. Zero overhead, no background processes.
-// @version         2.0.0
+// @version         2.1.0
 // @author          TPGoFighting
 // @github          https://github.com/TPGoFighting
 // @include         explorer.exe
@@ -57,6 +57,12 @@ fully visible and functional.
   - "micaAlt": "Mica Alt - 变体壁纸背景 (22H2+)"
   - "clear": "Clear - 无背景效果"
   - "blur": "Blur - 丙烯酸模糊效果"
+- blurOpacity: 19
+  $name: 模糊效果的不透明度 (0-100%)
+  $description: 仅在“丙烯酸模糊效果”模式下生效。数值越低背景越透明。越接近0越透，19%为舒适磨砂效果。
+- blurColor: "#FFFFFF"
+  $name: 模糊效果的着色颜色 (HEX 格式)
+  $description: 仅在“丙烯酸模糊效果”模式下生效。支持白色 (#FFFFFF)、黑色 (#000000) 等任何 HEX 颜色。
 - textColorMode: "default"
   $name: 文件列表文字颜色覆盖
   $options:
@@ -78,6 +84,14 @@ fully visible and functional.
 #include <windhawk_utils.h>
 
 #include <unordered_set>
+
+// C++/WinRT support for WinUI 3 XAML resources
+#undef GetCurrentTime
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Microsoft.UI.Xaml.h>
+#include <winrt/Microsoft.UI.Xaml.Markup.h>
 
 // ==================== 消息常量 ====================
 
@@ -133,6 +147,10 @@ struct {
     TextColorMode textColorMode;
     bool applyToNavPane;
     bool applyToCommandBar;
+    int blurOpacity;
+    unsigned int blurColorR;
+    unsigned int blurColorG;
+    unsigned int blurColorB;
 } g_settings;
 
 static void LoadSettings()
@@ -159,6 +177,22 @@ static void LoadSettings()
 
     g_settings.applyToNavPane = Wh_GetIntSetting(L"applyToNavPane") != 0;
     g_settings.applyToCommandBar = Wh_GetIntSetting(L"applyToCommandBar") != 0;
+
+    g_settings.blurOpacity = Wh_GetIntSetting(L"blurOpacity");
+    if (g_settings.blurOpacity < 0 || g_settings.blurOpacity > 100) {
+        g_settings.blurOpacity = 19;
+    }
+
+    PCWSTR colorStr = Wh_GetStringSetting(L"blurColor");
+    g_settings.blurColorR = 255;
+    g_settings.blurColorG = 255;
+    g_settings.blurColorB = 255;
+    if (colorStr) {
+        if (wcslen(colorStr) >= 7 && colorStr[0] == L'#') {
+            swscanf(colorStr + 1, L"%02x%02x%02x", &g_settings.blurColorR, &g_settings.blurColorG, &g_settings.blurColorB);
+        }
+        Wh_FreeStringSetting(colorStr);
+    }
 }
 
 // ==================== DWM/ACCENT API 动态加载 ====================
@@ -243,13 +277,19 @@ static void ApplyBackdropEffect(HWND hWnd, TransparencyMode mode)
     if (mode == kModeBlur)
     {
         // Blur: 真正可见的丙烯酸模糊效果
-        // 保留 Mica 作为基础层，再叠 SWCA 丙烯酸模糊 + 白色着色
+        // 保留 Mica 作为基础层，再叠 SWCA 丙烯酸模糊 + 颜色着色
         if (pSetWindowCompositionAttribute)
         {
+            DWORD alpha = (g_settings.blurOpacity * 255) / 100;
+            DWORD gradientColor = (alpha << 24) | 
+                                  (g_settings.blurColorB << 16) | 
+                                  (g_settings.blurColorG << 8) | 
+                                  g_settings.blurColorR;
+
             ACCENT_POLICY accent = {
                 ACCENT_ENABLE_ACRYLICBLURBEHIND,
                 0,
-                0x30FFFFFF,  // AA=0x30 (19%白色着色) — 肉眼可见的磨砂玻璃效果
+                gradientColor,
                 0
             };
             WINCOMPATTRDATA wcd = { WCA_ACCENT_POLICY, &accent, sizeof(accent) };
@@ -345,6 +385,97 @@ static std::unordered_set<HWND> g_processedCabinets;
 
 // ==================== 核心透明化逻辑 ====================
 
+static void OverrideXamlResources()
+{
+    try
+    {
+        auto app = winrt::Microsoft::UI::Xaml::Application::Current();
+        if (!app) return;
+
+        auto resources = app.Resources();
+        if (!resources) return;
+
+        // 1. Create a transparent SolidColorBrush using standard XAML compilation
+        winrt::Windows::Foundation::IInspectable transparentBrush = 
+            winrt::Microsoft::UI::Xaml::Markup::XamlReader::Load(
+                L"<SolidColorBrush xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Color=\"Transparent\" />"
+            );
+
+        if (transparentBrush)
+        {
+            // Apply transparency to Navigation Pane (NavigationView etc)
+            if (g_settings.applyToNavPane)
+            {
+                resources.Insert(winrt::box_value(L"NavigationViewDefaultBackground"), transparentBrush);
+                resources.Insert(winrt::box_value(L"NavigationViewExpandedPaneBackground"), transparentBrush);
+                resources.Insert(winrt::box_value(L"NavigationViewContentBackground"), transparentBrush);
+                resources.Insert(winrt::box_value(L"NavigationViewListBackground"), transparentBrush);
+                resources.Insert(winrt::box_value(L"TreeViewBackground"), transparentBrush);
+                resources.Insert(winrt::box_value(L"SidebarBackground"), transparentBrush);
+            }
+
+            // Apply transparency to Command Bar (top toolbar elements)
+            if (g_settings.applyToCommandBar)
+            {
+                resources.Insert(winrt::box_value(L"CommandBarBackground"), transparentBrush);
+                resources.Insert(winrt::box_value(L"CommandBarBorderBrush"), transparentBrush);
+                resources.Insert(winrt::box_value(L"CommandBarSeparatorBrush"), transparentBrush);
+                resources.Insert(winrt::box_value(L"CommandBarSeparatorBackground"), transparentBrush);
+                resources.Insert(winrt::box_value(L"FileExplorerCommandBarBackground"), transparentBrush);
+                resources.Insert(winrt::box_value(L"CommandBarControlRootGridBackground"), transparentBrush);
+                resources.Insert(winrt::box_value(L"NavigationBarControlGridBackground"), transparentBrush);
+            }
+        }
+
+        // Apply custom text color overrides if selected in settings
+        if (IsTextColorOverridden())
+        {
+            COLORREF colorRef = GetTextColorForMode();
+            BYTE r = GetRValue(colorRef);
+            BYTE g = GetGValue(colorRef);
+            BYTE b = GetBValue(colorRef);
+
+            WCHAR xamlBuf[256];
+            _snwprintf_s(xamlBuf, _TRUNCATE,
+                L"<SolidColorBrush xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" Color=\"#FF%02X%02X%02X\" />",
+                r, g, b);
+
+            winrt::Windows::Foundation::IInspectable textBrush = 
+                winrt::Microsoft::UI::Xaml::Markup::XamlReader::Load(xamlBuf);
+
+            if (textBrush)
+            {
+                // File grid/list text resources
+                resources.Insert(winrt::box_value(L"ListViewItemForeground"), textBrush);
+                resources.Insert(winrt::box_value(L"ListViewItemForegroundSelected"), textBrush);
+                resources.Insert(winrt::box_value(L"ListViewItemForegroundSelectedPointerOver"), textBrush);
+                resources.Insert(winrt::box_value(L"ListViewItemForegroundPointerOver"), textBrush);
+                resources.Insert(winrt::box_value(L"ListViewItemForegroundPressed"), textBrush);
+
+                // Navigation tree text resources
+                resources.Insert(winrt::box_value(L"TreeViewItemForeground"), textBrush);
+                resources.Insert(winrt::box_value(L"TreeViewItemForegroundSelected"), textBrush);
+                resources.Insert(winrt::box_value(L"TreeViewItemForegroundSelectedPointerOver"), textBrush);
+                resources.Insert(winrt::box_value(L"TreeViewItemForegroundPointerOver"), textBrush);
+                resources.Insert(winrt::box_value(L"TreeViewItemForegroundPressed"), textBrush);
+
+                // General labels and elements
+                resources.Insert(winrt::box_value(L"SystemControlForegroundBaseHighBrush"), textBrush);
+                resources.Insert(winrt::box_value(L"SystemControlPageTextBaseHighBrush"), textBrush);
+
+                // WinUI 3 Specific text resource keys
+                resources.Insert(winrt::box_value(L"TextControlForeground"), textBrush);
+                resources.Insert(winrt::box_value(L"TextControlForegroundPointerOver"), textBrush);
+                resources.Insert(winrt::box_value(L"TextControlForegroundFocused"), textBrush);
+            }
+        }
+    }
+    catch (...)
+    {
+        // Fail silently to avoid crashing Explorer if XAML engine is in an unexpected state
+    }
+}
+
 static void ApplyTransparencyToCabinet(HWND hCabinet)
 {
     if (g_processedCabinets.count(hCabinet))
@@ -352,6 +483,7 @@ static void ApplyTransparencyToCabinet(HWND hCabinet)
     g_processedCabinets.insert(hCabinet);
 
     ApplyBackdropEffect(hCabinet, g_settings.transparencyMode);
+    OverrideXamlResources();
     EnumChildWindows(hCabinet, EnumCabinetChildProc, 0);
     InvalidateRect(hCabinet, NULL, TRUE);
 }
@@ -390,10 +522,13 @@ BOOL CALLBACK EnumCabinetChildProc(HWND hChild, LPARAM lParam)
                 hDui, TransparentChildSubclassProc, 0);
         }
     }
-    else if (wcscmp(szClass, L"Windows.UI.Composition.DesktopWindowContentBridge") == 0)
+    else if (wcscmp(szClass, L"Windows.UI.Composition.DesktopWindowContentBridge") == 0 ||
+             wcscmp(szClass, L"Microsoft.UI.Content.DesktopChildSiteBridge") == 0 ||
+             wcscmp(szClass, L"InputSiteWindowClass") == 0)
     {
         WindhawkUtils::SetWindowSubclassFromAnyThread(
             hChild, TransparentChildSubclassProc, 0);
+        OverrideXamlResources();
     }
     else if (wcscmp(szClass, L"DirectUIHWND") == 0 ||
              wcscmp(szClass, L"UIItemsView") == 0 ||
@@ -523,6 +658,54 @@ HWND WINAPI CreateWindowExW_Hook(
             WindhawkUtils::SetWindowSubclassFromAnyThread(
                 hWnd, CabinetSubclassProc, 0);
             PostMessageW(hWnd, WM_DEFERRED_INIT, 0, 0);
+        }
+        else if (wcscmp(lpClassName, L"SHELLDLL_DefView") == 0)
+        {
+            WindhawkUtils::SetWindowSubclassFromAnyThread(
+                hWnd, ShellDefViewSubclassProc, 0);
+        }
+        else if (wcscmp(lpClassName, L"SysListView32") == 0)
+        {
+            ListView_SetBkColor(hWnd, CLR_NONE);
+            ListView_SetTextBkColor(hWnd, CLR_NONE);
+            if (IsTextColorOverridden())
+                ListView_SetTextColor(hWnd, GetTextColorForMode());
+
+            WindhawkUtils::SetWindowSubclassFromAnyThread(
+                hWnd, ListViewSubclassProc, 0);
+        }
+        else if (wcscmp(lpClassName, L"Windows.UI.Composition.DesktopWindowContentBridge") == 0 ||
+                 wcscmp(lpClassName, L"Microsoft.UI.Content.DesktopChildSiteBridge") == 0 ||
+                 wcscmp(lpClassName, L"InputSiteWindowClass") == 0)
+        {
+            WindhawkUtils::SetWindowSubclassFromAnyThread(
+                hWnd, TransparentChildSubclassProc, 0);
+            
+            // XAML Island host window is created. Trigger XAML resource override!
+            OverrideXamlResources();
+        }
+        else if (wcscmp(lpClassName, L"DirectUIHWND") == 0 ||
+                 wcscmp(lpClassName, L"UIItemsView") == 0 ||
+                 wcscmp(lpClassName, L"ItemsView") == 0 ||
+                 wcscmp(lpClassName, L"UserSettingsBox") == 0 ||
+                 wcscmp(lpClassName, L"WorkerW") == 0)
+        {
+            WindhawkUtils::SetWindowSubclassFromAnyThread(
+                hWnd, TransparentChildSubclassProc, 0);
+        }
+        else if (wcscmp(lpClassName, L"TreeView") == 0 ||
+                 wcscmp(lpClassName, L"NamespaceTreeControl") == 0)
+        {
+            if (g_settings.applyToNavPane)
+                WindhawkUtils::SetWindowSubclassFromAnyThread(
+                    hWnd, NavPaneSubclassProc, 0);
+        }
+        else if (wcscmp(lpClassName, L"ReBarWindow32") == 0 ||
+                 wcscmp(lpClassName, L"ToolbarWindow32") == 0)
+        {
+            if (g_settings.applyToCommandBar)
+                WindhawkUtils::SetWindowSubclassFromAnyThread(
+                    hWnd, TransparentChildSubclassProc, 0);
         }
     }
 

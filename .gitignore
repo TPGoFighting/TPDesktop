@@ -12,3 +12,7 @@ Desktop.ini
 *.log
 copy_log.txt
 *.bak
+deploy_log.txt
+*.dll
+query
+
